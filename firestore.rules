@@ -15,12 +15,18 @@ service cloud.firestore {
     }
 
     function isMember() {
-      return signedIn()
-        && exists(/databases/$(database)/documents/members/$(request.auth.uid));
+      return signedIn() && exists(memberPath(request.auth.uid));
+    }
+
+    function memberPath(uid) {
+      return /databases/$(database)/documents/members/$(uid);
+    }
+    function invitePath(key) {
+      return /databases/$(database)/documents/invites/$(key);
     }
 
     // Invite keys (what the QR codes contain). The document ID is the key.
-    // Only the admin can see, create, or revoke them.
+    // Only the admin can see, create, or revoke them. Each key works once.
     match /invites/{key} {
       allow read: if isAdmin();
       allow create: if isAdmin()
@@ -29,7 +35,16 @@ service cloud.firestore {
         && request.resource.data.label.size() <= 60
         && request.resource.data.createdAt == request.time;
       allow delete: if isAdmin();
-      allow update: if false;
+
+      // Redeeming: the person joining marks the key used by them, in the same
+      // batch that creates their membership (see members create below)
+      allow update: if signedIn()
+        && !('usedBy' in resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedBy', 'usedAt'])
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.usedAt == request.time
+        && !exists(memberPath(request.auth.uid))
+        && getAfter(memberPath(request.auth.uid)).data.code == key;
     }
 
     match /members/{uid} {
@@ -37,7 +52,8 @@ service cloud.firestore {
       allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow list: if isAdmin();
 
-      // Join by presenting a valid invite key (the admin can always join)
+      // Join with an unused invite key, marking it used in the same batch
+      // (the admin can always join)
       allow create: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['code', 'name', 'email', 'joinedAt'])
@@ -46,12 +62,16 @@ service cloud.firestore {
         && request.resource.data.code.size() <= 100
         && request.resource.data.name is string
         && request.resource.data.name.size() <= 100
+        // Name is locked to the Google account's name (or email if it has none)
+        && request.resource.data.name == request.auth.token.get('name', request.auth.token.email)
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.joinedAt == request.time
-        && (isAdmin()
-            || exists(/databases/$(database)/documents/invites/$(request.resource.data.code)));
+        && (isAdmin() || (
+              exists(invitePath(request.resource.data.code))
+              && !('usedBy' in get(invitePath(request.resource.data.code)).data)
+              && getAfter(invitePath(request.resource.data.code)).data.get('usedBy', '') == request.auth.uid));
 
-      // Only the admin can remove people
+      // Only the admin can remove people (their used key can't get them back in)
       allow delete: if isAdmin();
       allow update: if false;
     }
@@ -63,6 +83,8 @@ service cloud.firestore {
       allow create: if isMember()
         && request.resource.data.keys().hasOnly(['text', 'uid', 'name', 'createdAt'])
         && request.resource.data.uid == request.auth.uid
+        // Must post under the name locked in when you joined
+        && request.resource.data.name == get(memberPath(request.auth.uid)).data.name
         && request.resource.data.text is string
         && request.resource.data.text.size() > 0
         && request.resource.data.text.size() <= 2000

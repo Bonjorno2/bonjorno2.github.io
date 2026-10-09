@@ -153,7 +153,7 @@
   <div id="adminBody">
     <section class="card">
       <h2>New QR key</h2>
-      <p class="muted" style="margin:0 0 10px">Anyone who scans it and signs in with Google joins the chat. Revoke it any time.</p>
+      <p class="muted" style="margin:0 0 10px">Works once: the first person to scan it and sign in with Google joins, then it stops working.</p>
       <form class="row" id="newKeyForm">
         <input id="keyLabel" placeholder="Label, e.g. For Sam" maxlength="60" autocomplete="off">
         <button type="submit" id="newKeyBtn">Create</button>
@@ -187,7 +187,7 @@
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, addDoc, query, orderBy, limit,
-    onSnapshot, serverTimestamp, doc, getDoc, setDoc, getDocs, deleteDoc
+    onSnapshot, serverTimestamp, doc, getDoc, setDoc, getDocs, deleteDoc, writeBatch
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   // ▼▼▼ PASTE YOUR FIREBASE CONFIG HERE (see README step 5) ▼▼▼
@@ -218,6 +218,7 @@
 
   let unsubscribe = null;
   let currentUser = null;
+  let memberName = "";   // the name locked in when you joined; the rules require messages to use it
   const isAdmin = () => currentUser?.email?.toLowerCase() === ADMIN_EMAIL;
 
   function show(screen) {
@@ -263,6 +264,7 @@
       const member = await getDoc(doc(db, "members", user.uid));
       if (currentUser !== user) return;   // signed out / switched while loading
       if (member.exists()) {
+        memberName = member.data().name;
         localStorage.removeItem("pendingKey");
         return enterChat();
       }
@@ -285,7 +287,7 @@
 
   function enterChat() {
     show(chatEl);
-    $("who").textContent = currentUser.displayName || currentUser.email;
+    $("who").textContent = memberName;
     $("adminBtn").classList.toggle("hidden", !isAdmin());
     if (!unsubscribe) listen();
     inputEl.focus();
@@ -301,18 +303,26 @@
 
   // ---------- Joining with an invite code / QR key ----------
   // Returns an error message, or null on success.
+  // Keys are single-use: joining and marking the key used happen in one batch,
+  // and the rules reject either one without the other.
   async function joinWithCode(code) {
     try {
-      await setDoc(doc(db, "members", currentUser.uid), {
-        code,
-        name: currentUser.displayName || currentUser.email,
-        email: currentUser.email,
-        joinedAt: serverTimestamp()
+      // Must match the name in the sign-in token, which the rules check
+      const claims = (await currentUser.getIdTokenResult()).claims;
+      const name = claims.name || currentUser.email;
+      const batch = writeBatch(db);
+      batch.set(doc(db, "members", currentUser.uid), {
+        code, name, email: currentUser.email, joinedAt: serverTimestamp()
       });
+      if (!isAdmin()) {
+        batch.update(doc(db, "invites", code), { usedBy: currentUser.uid, usedAt: serverTimestamp() });
+      }
+      await batch.commit();
+      memberName = name;
       return null;
     } catch (err) {
-      return err.code === "permission-denied"
-        ? "That key isn't valid. It may have been revoked. Ask for a new one."
+      return err.code === "permission-denied" || err.code === "not-found"
+        ? "That key isn't valid. It may have already been used or revoked. Ask for a new one."
         : "Couldn't join: " + err.message;
     }
   }
@@ -416,19 +426,24 @@
       keyList.innerHTML = "";
       if (invites.empty) keyList.textContent = "No keys. Create one above.";
       for (const d of invites.docs) {
-        const { label, createdAt } = d.data();
-        const used = memberDocs.filter((m) => m.code === d.id).length;
+        const { label, createdAt, usedBy, usedAt } = d.data();
+        const user = usedBy && memberDocs.find((m) => m.id === usedBy);
+        const status = usedBy
+          ? "Used by " + (user ? user.name : "a removed member") + " · " + fmtDate(usedAt)
+          : "Not used yet" + (createdAt ? " · made " + fmtDate(createdAt) : "");
+        const remove = async () => {
+          const msg = usedBy
+            ? `Delete the record of "${label || "this key"}"? (It's already used, so this changes nothing else.)`
+            : `Revoke "${label || "this key"}"? Nobody will be able to join with it.`;
+          if (!confirm(msg)) return;
+          await deleteDoc(doc(db, "invites", d.id));
+          loadAdmin();
+        };
         keyList.appendChild(listItem(
           label || "(no label)",
-          [fmtDate(createdAt), used + (used === 1 ? " person joined" : " people joined")].filter(Boolean).join(" · "),
-          [
-            ["Show QR", "", () => showQr(d.id, label)],
-            ["Revoke", "danger", async () => {
-              if (!confirm(`Revoke "${label || d.id}"? Nobody new can join with it. People who already joined stay in.`)) return;
-              await deleteDoc(doc(db, "invites", d.id));
-              loadAdmin();
-            }]
-          ]
+          status,
+          usedBy ? [["Delete", "danger", remove]]
+                 : [["Show QR", "", () => showQr(d.id, label)], ["Revoke", "danger", remove]]
         ));
       }
 
@@ -440,7 +455,7 @@
           m.name + (isMe ? " (you)" : ""),
           [m.email, fmtDate(m.joinedAt)].filter(Boolean).join(" · "),
           isMe ? [] : [["Remove", "danger", async () => {
-            if (!confirm(`Remove ${m.name}? They lose access right away. Revoke their key too, or they can rejoin with it.`)) return;
+            if (!confirm(`Remove ${m.name} (${m.email})? They lose access right away and can only come back with a new key.`)) return;
             await deleteDoc(doc(db, "members", m.id));
             loadAdmin();
           }]]
@@ -533,7 +548,7 @@
       await addDoc(collection(db, "messages"), {
         text,
         uid: currentUser.uid,
-        name: currentUser.displayName || currentUser.email,
+        name: memberName,
         createdAt: serverTimestamp()
       });
     } catch (err) {

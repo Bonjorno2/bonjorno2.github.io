@@ -28,8 +28,10 @@ The admin (`awarlock2002a@gmail.com`, set in `firestore.rules` and `ADMIN_EMAIL`
 
 - Click **Admin** (top right of the chat) → type a label like "For Sam" → **Create**. You get a QR code plus a link.
 - Share the QR (show it, or **Download QR** and send the image) or **Copy link**. Whoever scans it signs in with Google and is in — no typing.
-- **Keys** lists every key and how many people joined with it. **Revoke** stops new joins with that key; people already in stay in.
-- **Members** lists everyone. **Remove** takes away access right away — revoke their key too, or they could rejoin with it.
+- **Keys are single-use.** The first person to join with a key uses it up; after that it does nothing. Make one key per person.
+- **Keys** lists every key: "Not used yet" (with **Revoke**) or "Used by <name>".
+- **Members** lists everyone with their email. **Remove** takes away access right away; they can only come back with a new key.
+- Names are locked to each person's Google account name when they join, and every message must carry that name, so members can't post as someone else.
 - On a phone: open the link in Safari or Chrome → **Share → Add to Home Screen**, and it works like an app.
 - Typed codes still work: the "Almost there" screen accepts a key typed by hand.
 
@@ -37,6 +39,6 @@ The admin (`awarlock2002a@gmail.com`, set in `firestore.rules` and `ADMIN_EMAIL`
 
 - The Firebase config being visible in a public repo is normal. The **rules** are what protect the messages; only members can read or post.
 - Keys are never in the page itself, so they can't be found by viewing the source. The key in a QR link sits after `#`, which browsers don't send to GitHub. Anyone who signs in without a key just sees the "enter invite code" screen.
-- Treat a QR like a house key: anyone who gets a photo of it can join until you revoke it. Make one per person so you can revoke individually.
+- Treat an unused QR like a house key: whoever uses it first gets in. If one goes astray before its person uses it, **Revoke** it and make a new one. If someone you don't know shows up in **Members**, remove them.
 - The free Firebase plan covers tens of thousands of messages a day, far more than a group chat needs.
 - The 🔔 button gives notifications only while the page is open (e.g. in a background tab). It can't notify when the page is closed.
