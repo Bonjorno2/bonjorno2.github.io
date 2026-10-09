@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Group Chat</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #16181d; --muted: #6b7280;
+    --mine: #2563eb; --mine-text: #ffffff; --theirs: #e6e8ec; --border: #e2e4e9;
+    --error: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #181b21; --text: #eceef2; --muted: #9aa1ad;
+      --mine: #3b82f6; --mine-text: #ffffff; --theirs: #262a33; --border: #2a2e37;
+      --error: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .hidden { display: none !important; }
+  button {
+    font: inherit; cursor: pointer; border: 0; border-radius: 10px;
+    padding: 10px 16px; background: var(--mine); color: var(--mine-text);
+  }
+  button.ghost { background: transparent; color: var(--muted); padding: 8px 10px; }
+
+  /* Login + Join */
+  #login, #join {
+    height: 100%; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center;
+  }
+  #login h1, #join h1 { margin: 0; font-size: 28px; }
+  #login p, #join p { margin: 0; color: var(--muted); }
+  #joinForm { display: flex; gap: 8px; width: 100%; max-width: 360px; }
+  #codeInput {
+    flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px;
+  }
+  #codeInput:focus { outline: 2px solid var(--mine); outline-offset: -1px; }
+  .error { color: var(--error); min-height: 1.4em; }
+
+  /* Chat */
+  #chat { height: 100%; display: flex; flex-direction: column; max-width: 760px; margin: 0 auto; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; padding-top: max(10px, env(safe-area-inset-top));
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header .title { font-weight: 600; }
+  header .who { font-size: 13px; color: var(--muted); }
+  #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 4px; }
+  .msg { max-width: 78%; display: flex; flex-direction: column; }
+  .msg.mine { align-self: flex-end; align-items: flex-end; }
+  .msg .name { font-size: 12px; color: var(--muted); margin: 8px 10px 2px; }
+  .msg .bubble {
+    padding: 8px 12px; border-radius: 18px; background: var(--theirs);
+    white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere;
+  }
+  .msg.mine .bubble { background: var(--mine); color: var(--mine-text); }
+  .msg .time { font-size: 11px; color: var(--muted); margin: 2px 10px 0; }
+  .empty { margin: auto; color: var(--muted); }
+  #composer {
+    display: flex; gap: 8px; padding: 10px 12px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    background: var(--panel); border-top: 1px solid var(--border);
+  }
+  #input {
+    flex: 1; resize: none; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 18px; padding: 9px 14px; max-height: 140px;
+  }
+  #input:focus { outline: 2px solid var(--mine); outline-offset: -1px; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Group Chat</h1>
+  <p>Sign in to join the conversation.</p>
+  <button id="googleBtn">Sign in with Google</button>
+  <p id="loginError" class="error"></p>
+</div>
+
+<div id="join" class="hidden">
+  <h1>Almost there</h1>
+  <p id="joinWho"></p>
+  <p>Enter the invite code to join the chat. You only need to do this once.</p>
+  <form id="joinForm">
+    <input id="codeInput" placeholder="Invite code" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="100">
+    <button type="submit" id="joinBtn">Join</button>
+  </form>
+  <p id="joinError" class="error"></p>
+  <button class="ghost" id="joinSignOutBtn">Use a different account</button>
+</div>
+
+<div id="chat" class="hidden">
+  <header>
+    <div>
+      <div class="title">Group Chat</div>
+      <div class="who" id="who"></div>
+    </div>
+    <div>
+      <button class="ghost" id="notifyBtn" title="Turn on notifications">🔔</button>
+      <button class="ghost" id="signOutBtn">Sign out</button>
+    </div>
+  </header>
+  <main id="messages"><div class="empty">No messages yet. Say hi!</div></main>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Message" maxlength="2000" autocomplete="off"></textarea>
+    <button type="submit">Send</button>
+  </form>
+</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+    getRedirectResult, onAuthStateChanged, signOut
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import {
+    getFirestore, collection, addDoc, query, orderBy, limit,
+    onSnapshot, serverTimestamp, doc, getDoc, setDoc
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+  // ▼▼▼ PASTE YOUR FIREBASE CONFIG HERE (see README step 5) ▼▼▼
+  const firebaseConfig = {
+    apiKey: "AIzaSyCqvloPCDKw98RpzbsTB_ZUCYgsqo_zBLc",
+    authDomain: "groupchat-1a940.firebaseapp.com",
+    projectId: "groupchat-1a940",
+    storageBucket: "groupchat-1a940.firebasestorage.app",
+    messagingSenderId: "862979420929",
+    appId: "1:862979420929:web:f032c0988d56680bbaa100"
+  };
+  // ▲▲▲ ------------------------------------------------------ ▲▲▲
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const $ = (id) => document.getElementById(id);
+  const loginEl = $("login"), chatEl = $("chat"), messagesEl = $("messages");
+  const inputEl = $("input"), formEl = $("composer"), loginError = $("loginError");
+  const joinEl = $("join"), codeInput = $("codeInput"), joinError = $("joinError");
+
+  let unsubscribe = null;
+  let currentUser = null;
+
+  function show(screen) {
+    for (const el of [loginEl, joinEl, chatEl]) el.classList.toggle("hidden", el !== screen);
+  }
+
+  // ---------- Sign in / out ----------
+  $("googleBtn").addEventListener("click", async () => {
+    loginError.textContent = "";
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (err) {
+      if (err.code === "auth/popup-blocked" || err.code === "auth/operation-not-supported-in-this-environment") {
+        await signInWithRedirect(auth, provider);
+      } else if (err.code !== "auth/popup-closed-by-user") {
+        loginError.textContent = "Sign-in failed: " + err.message;
+      }
+    }
+  });
+  getRedirectResult(auth).catch((err) => { loginError.textContent = "Sign-in failed: " + err.message; });
+
+  $("signOutBtn").addEventListener("click", () => signOut(auth));
+  $("joinSignOutBtn").addEventListener("click", () => signOut(auth));
+
+  onAuthStateChanged(auth, async (user) => {
+    currentUser = user;
+    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    if (!user) {
+      show(loginEl);
+      messagesEl.innerHTML = '<div class="empty">No messages yet. Say hi!</div>';
+      return;
+    }
+    try {
+      const member = await getDoc(doc(db, "members", user.uid));
+      if (currentUser !== user) return;   // signed out / switched while loading
+      member.exists() ? enterChat() : showJoin();
+    } catch (err) {
+      console.error(err);
+      signOut(auth);
+      loginError.textContent = "Couldn't check membership: " + err.message;
+    }
+  });
+
+  function enterChat() {
+    show(chatEl);
+    $("who").textContent = currentUser.displayName || currentUser.email;
+    listen();
+    inputEl.focus();
+  }
+
+  function showJoin() {
+    show(joinEl);
+    $("joinWho").textContent = "Signed in as " + currentUser.email;
+    joinError.textContent = "";
+    codeInput.value = "";
+    codeInput.focus();
+  }
+
+  // ---------- Joining with an invite code ----------
+  $("joinForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const code = codeInput.value.trim().toLowerCase();
+    if (!code || !currentUser) return;
+    joinError.textContent = "";
+    $("joinBtn").disabled = true;
+    try {
+      await setDoc(doc(db, "members", currentUser.uid), {
+        code,
+        name: currentUser.displayName || currentUser.email,
+        email: currentUser.email,
+        joinedAt: serverTimestamp()
+      });
+      enterChat();
+    } catch (err) {
+      joinError.textContent = err.code === "permission-denied"
+        ? "That code isn't right. Check it and try again."
+        : "Couldn't join: " + err.message;
+    } finally {
+      $("joinBtn").disabled = false;
+    }
+  });
+
+  // ---------- Live messages ----------
+  function listen() {
+    const q = query(collection(db, "messages"), orderBy("createdAt", "desc"), limit(300));
+    let firstLoad = true;
+    unsubscribe = onSnapshot(q, (snap) => {
+      const msgs = snap.docs
+        .map((d) => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }) }))
+        .reverse();
+      render(msgs);
+
+      if (!firstLoad) {
+        snap.docChanges().forEach((ch) => {
+          const m = ch.doc.data({ serverTimestamps: "estimate" });
+          if (ch.type === "added" && m.uid !== currentUser?.uid) notify(m);
+        });
+      }
+      firstLoad = false;
+    }, (err) => {
+      if (err.code === "permission-denied") {
+        unsubscribe = null;
+        showJoin();   // membership was removed
+      } else {
+        console.error(err);
+      }
+    });
+  }
+
+  function render(msgs) {
+    const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
+    messagesEl.innerHTML = "";
+    if (!msgs.length) {
+      messagesEl.innerHTML = '<div class="empty">No messages yet. Say hi!</div>';
+      return;
+    }
+    let lastUid = null;
+    for (const m of msgs) {
+      const mine = m.uid === currentUser?.uid;
+      const wrap = document.createElement("div");
+      wrap.className = "msg" + (mine ? " mine" : "");
+
+      if (!mine && m.uid !== lastUid) {
+        const name = document.createElement("div");
+        name.className = "name";
+        name.textContent = m.name || "Someone";
+        wrap.appendChild(name);
+      }
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = m.text;           // textContent = safe, no HTML injection
+      wrap.appendChild(bubble);
+
+      const time = document.createElement("div");
+      time.className = "time";
+      time.textContent = m.createdAt?.toDate ? formatTime(m.createdAt.toDate()) : "";
+      wrap.appendChild(time);
+
+      messagesEl.appendChild(wrap);
+      lastUid = m.uid;
+    }
+    if (nearBottom || msgs.at(-1)?.uid === currentUser?.uid) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  }
+
+  function formatTime(d) {
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return sameDay
+      ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+      : d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+
+  // ---------- Sending ----------
+  formEl.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = inputEl.value.trim();
+    if (!text || !currentUser) return;
+    inputEl.value = "";
+    autoGrow();
+    try {
+      await addDoc(collection(db, "messages"), {
+        text,
+        uid: currentUser.uid,
+        name: currentUser.displayName || currentUser.email,
+        createdAt: serverTimestamp()
+      });
+    } catch (err) {
+      inputEl.value = text;
+      alert("Message didn't send: " + err.message);
+    }
+  });
+
+  // Enter sends, Shift+Enter makes a new line (on computers)
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !("ontouchstart" in window)) {
+      e.preventDefault();
+      formEl.requestSubmit();
+    }
+  });
+  function autoGrow() {
+    inputEl.style.height = "auto";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + "px";
+  }
+  inputEl.addEventListener("input", autoGrow);
+
+  // ---------- Notifications (while the tab is open in the background) ----------
+  $("notifyBtn").addEventListener("click", async () => {
+    if (!("Notification" in window)) return alert("This browser doesn't support notifications.");
+    const p = await Notification.requestPermission();
+    alert(p === "granted" ? "Notifications on (while this page is open)." : "Notifications are blocked.");
+  });
+  function notify(m) {
+    if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+      try { new Notification(m.name || "New message", { body: m.text }); } catch {}
+    }
+  }
+</script>
+</body>
+</html>
