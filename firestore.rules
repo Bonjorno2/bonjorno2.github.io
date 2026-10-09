@@ -2,9 +2,12 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Invite codes: create a document in the "invites" collection whose
-    // Document ID is the code (lowercase). Nobody can read or list these,
-    // so the code can't be discovered from the page.
+    // ▼▼▼ The chat admin (can create/revoke QR keys and remove members) ▼▼▼
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email == 'awarlock2002a@gmail.com';
+    }
+    // ▲▲▲ Also update ADMIN_EMAIL in index.html if you change this ▲▲▲
 
     function signedIn() {
       return request.auth != null
@@ -16,11 +19,25 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/members/$(request.auth.uid));
     }
 
-    match /members/{uid} {
-      // You can check your own membership, nobody else's
-      allow get: if signedIn() && request.auth.uid == uid;
+    // Invite keys (what the QR codes contain). The document ID is the key.
+    // Only the admin can see, create, or revoke them.
+    match /invites/{key} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['label', 'createdAt'])
+        && request.resource.data.label is string
+        && request.resource.data.label.size() <= 60
+        && request.resource.data.createdAt == request.time;
+      allow delete: if isAdmin();
+      allow update: if false;
+    }
 
-      // Join by presenting a valid invite code
+    match /members/{uid} {
+      // You can check your own membership; the admin can see everyone
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+
+      // Join by presenting a valid invite key (the admin can always join)
       allow create: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['code', 'name', 'email', 'joinedAt'])
@@ -31,10 +48,12 @@ service cloud.firestore {
         && request.resource.data.name.size() <= 100
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.joinedAt == request.time
-        && exists(/databases/$(database)/documents/invites/$(request.resource.data.code));
+        && (isAdmin()
+            || exists(/databases/$(database)/documents/invites/$(request.resource.data.code)));
 
-      // Remove someone by deleting their member document in the console
-      allow update, delete: if false;
+      // Only the admin can remove people
+      allow delete: if isAdmin();
+      allow update: if false;
     }
 
     match /messages/{messageId} {
@@ -52,7 +71,7 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Everything else (including invites) is locked
+    // Everything else is locked
     match /{document=**} {
       allow read, write: if false;
     }

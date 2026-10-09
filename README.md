@@ -22,16 +22,21 @@ Two free accounts: **Firebase** (stores messages and handles Google sign-in) and
 10. Back in Firebase: **Authentication → Settings → Authorized domains → Add domain** → enter `bonjorno2.github.io`.
 11. Open **https://bonjorno2.github.io**, sign in with Google, and send a test message.
 
-## Share it
+## Share it (QR keys)
 
-- Send everyone the link **and the invite code**. They sign in with any Google account and enter the code once.
-- On a phone, open the link in Safari or Chrome → **Share → Add to Home Screen**, and it works like an app.
-- **Change the code:** Firestore → Data → `invites` → delete the old code's document and add a new one. Existing members stay in.
-- **Remove someone:** Firestore → Data → `members` → find their document (it shows their name and email) → delete it.
+The admin (`awarlock2002a@gmail.com`, set in `firestore.rules` and `ADMIN_EMAIL` in `index.html`) signs in and is let in automatically. Then:
+
+- Click **Admin** (top right of the chat) → type a label like "For Sam" → **Create**. You get a QR code plus a link.
+- Share the QR (show it, or **Download QR** and send the image) or **Copy link**. Whoever scans it signs in with Google and is in — no typing.
+- **Keys** lists every key and how many people joined with it. **Revoke** stops new joins with that key; people already in stay in.
+- **Members** lists everyone. **Remove** takes away access right away — revoke their key too, or they could rejoin with it.
+- On a phone: open the link in Safari or Chrome → **Share → Add to Home Screen**, and it works like an app.
+- Typed codes still work: the "Almost there" screen accepts a key typed by hand.
 
 ## Good to know
 
 - The Firebase config being visible in a public repo is normal. The **rules** are what protect the messages; only members can read or post.
-- The invite code is never in the page itself, so it can't be found by viewing the source. Anyone who signs in without it just sees the "enter invite code" screen.
+- Keys are never in the page itself, so they can't be found by viewing the source. The key in a QR link sits after `#`, which browsers don't send to GitHub. Anyone who signs in without a key just sees the "enter invite code" screen.
+- Treat a QR like a house key: anyone who gets a photo of it can join until you revoke it. Make one per person so you can revoke individually.
 - The free Firebase plan covers tens of thousands of messages a day, far more than a group chat needs.
 - The 🔔 button gives notifications only while the page is open (e.g. in a background tab). It can't notify when the page is closed.

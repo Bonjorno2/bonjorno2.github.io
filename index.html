@@ -76,7 +76,34 @@
     border: 1px solid var(--border); border-radius: 18px; padding: 9px 14px; max-height: 140px;
   }
   #input:focus { outline: 2px solid var(--mine); outline-offset: -1px; }
+
+  /* Admin */
+  #admin { height: 100%; display: flex; flex-direction: column; max-width: 760px; margin: 0 auto; }
+  #adminBody { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+  #adminBody h2 { margin: 0 0 8px; font-size: 17px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row input {
+    flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px;
+  }
+  .list-item {
+    display: flex; gap: 8px; align-items: center; justify-content: space-between;
+    padding: 10px 0; border-top: 1px solid var(--border);
+  }
+  .list-item:first-child { border-top: 0; }
+  .list-item .meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .list-item .actions { display: flex; gap: 4px; flex-shrink: 0; }
+  button.small { padding: 6px 10px; font-size: 14px; }
+  button.danger { background: transparent; color: var(--error); }
+  #qrBox { text-align: center; }
+  #qrBox img { width: 240px; height: 240px; image-rendering: pixelated; background: #fff; border-radius: 8px; }
+  #qrBox .link { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; margin: 8px 0; }
+  .muted { color: var(--muted); font-size: 14px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"
+        integrity="sha384-8FWZA6BGMXhsfO+BLtrJK0We6gg5o1JyO8xQm6peWDEUs17ACA5ziE/NIAkl9z2k"
+        crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -106,6 +133,7 @@
       <div class="who" id="who"></div>
     </div>
     <div>
+      <button class="ghost hidden" id="adminBtn">Admin</button>
       <button class="ghost" id="notifyBtn" title="Turn on notifications">🔔</button>
       <button class="ghost" id="signOutBtn">Sign out</button>
     </div>
@@ -117,6 +145,40 @@
   </form>
 </div>
 
+<div id="admin" class="hidden">
+  <header>
+    <div class="title">Admin</div>
+    <button class="ghost" id="backBtn">← Back to chat</button>
+  </header>
+  <div id="adminBody">
+    <section class="card">
+      <h2>New QR key</h2>
+      <p class="muted" style="margin:0 0 10px">Anyone who scans it and signs in with Google joins the chat. Revoke it any time.</p>
+      <form class="row" id="newKeyForm">
+        <input id="keyLabel" placeholder="Label, e.g. For Sam" maxlength="60" autocomplete="off">
+        <button type="submit" id="newKeyBtn">Create</button>
+      </form>
+      <p id="adminError" class="error" style="margin:8px 0 0"></p>
+      <div id="qrBox" class="hidden">
+        <img id="qrImg" alt="QR code">
+        <div class="link" id="qrLink"></div>
+        <div class="row" style="justify-content:center">
+          <button class="small" id="copyLinkBtn" type="button">Copy link</button>
+          <a id="qrDownload" download="chat-key.gif"><button class="small" type="button">Download QR</button></a>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Keys</h2>
+      <div id="keyList" class="muted">Loading…</div>
+    </section>
+    <section class="card">
+      <h2>Members</h2>
+      <div id="memberList" class="muted">Loading…</div>
+    </section>
+  </div>
+</div>
+
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import {
@@ -125,7 +187,7 @@
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, addDoc, query, orderBy, limit,
-    onSnapshot, serverTimestamp, doc, getDoc, setDoc
+    onSnapshot, serverTimestamp, doc, getDoc, setDoc, getDocs, deleteDoc
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   // ▼▼▼ PASTE YOUR FIREBASE CONFIG HERE (see README step 5) ▼▼▼
@@ -148,11 +210,26 @@
   const inputEl = $("input"), formEl = $("composer"), loginError = $("loginError");
   const joinEl = $("join"), codeInput = $("codeInput"), joinError = $("joinError");
 
+  const adminEl = $("admin");
+
+  // Must match isAdmin() in firestore.rules (the rules are what actually enforce it)
+  const ADMIN_EMAIL = "awarlock2002a@gmail.com";
+  const SITE_URL = "https://bonjorno2.github.io/";
+
   let unsubscribe = null;
   let currentUser = null;
+  const isAdmin = () => currentUser?.email?.toLowerCase() === ADMIN_EMAIL;
 
   function show(screen) {
-    for (const el of [loginEl, joinEl, chatEl]) el.classList.toggle("hidden", el !== screen);
+    for (const el of [loginEl, joinEl, chatEl, adminEl]) el.classList.toggle("hidden", el !== screen);
+  }
+
+  // A QR key opens SITE_URL#join=<key>. Remember the key across the Google
+  // sign-in (which may redirect away), and strip it from the address bar.
+  const hashKey = new URLSearchParams(location.hash.slice(1)).get("join");
+  if (hashKey) {
+    localStorage.setItem("pendingKey", hashKey.trim().toLowerCase());
+    history.replaceState(null, "", location.pathname + location.search);
   }
 
   // ---------- Sign in / out ----------
@@ -185,7 +262,20 @@
     try {
       const member = await getDoc(doc(db, "members", user.uid));
       if (currentUser !== user) return;   // signed out / switched while loading
-      member.exists() ? enterChat() : showJoin();
+      if (member.exists()) {
+        localStorage.removeItem("pendingKey");
+        return enterChat();
+      }
+      const pending = isAdmin() ? "admin" : localStorage.getItem("pendingKey");
+      if (pending) {
+        const err = await joinWithCode(pending);
+        localStorage.removeItem("pendingKey");
+        if (!err) return enterChat();
+        showJoin();
+        joinError.textContent = err;
+        return;
+      }
+      showJoin();
     } catch (err) {
       console.error(err);
       signOut(auth);
@@ -196,7 +286,8 @@
   function enterChat() {
     show(chatEl);
     $("who").textContent = currentUser.displayName || currentUser.email;
-    listen();
+    $("adminBtn").classList.toggle("hidden", !isAdmin());
+    if (!unsubscribe) listen();
     inputEl.focus();
   }
 
@@ -208,13 +299,9 @@
     codeInput.focus();
   }
 
-  // ---------- Joining with an invite code ----------
-  $("joinForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const code = codeInput.value.trim().toLowerCase();
-    if (!code || !currentUser) return;
-    joinError.textContent = "";
-    $("joinBtn").disabled = true;
+  // ---------- Joining with an invite code / QR key ----------
+  // Returns an error message, or null on success.
+  async function joinWithCode(code) {
     try {
       await setDoc(doc(db, "members", currentUser.uid), {
         code,
@@ -222,15 +309,147 @@
         email: currentUser.email,
         joinedAt: serverTimestamp()
       });
-      enterChat();
+      return null;
     } catch (err) {
-      joinError.textContent = err.code === "permission-denied"
-        ? "That code isn't right. Check it and try again."
+      return err.code === "permission-denied"
+        ? "That key isn't valid. It may have been revoked. Ask for a new one."
         : "Couldn't join: " + err.message;
+    }
+  }
+
+  $("joinForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const code = codeInput.value.trim().toLowerCase();
+    if (!code || !currentUser) return;
+    joinError.textContent = "";
+    $("joinBtn").disabled = true;
+    const err = await joinWithCode(code);
+    $("joinBtn").disabled = false;
+    if (err) joinError.textContent = err;
+    else enterChat();
+  });
+
+  // ---------- Admin: QR keys and members ----------
+  $("adminBtn").addEventListener("click", () => { show(adminEl); loadAdmin(); });
+  $("backBtn").addEventListener("click", enterChat);
+
+  function newKey() {
+    const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";   // no look-alikes (l/1, o/0)
+    const bytes = crypto.getRandomValues(new Uint8Array(20));
+    return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+  }
+  const keyLink = (key) => SITE_URL + "#join=" + key;
+
+  function showQr(key, label) {
+    const qr = qrcode(0, "M");
+    qr.addData(keyLink(key));
+    qr.make();
+    const url = qr.createDataURL(8, 4);
+    $("qrImg").src = url;
+    $("qrDownload").href = url;
+    $("qrDownload").download = "chat-key-" + (label || key).replace(/[^a-z0-9]+/gi, "-").toLowerCase() + ".gif";
+    $("qrLink").textContent = keyLink(key) + (label ? "  (" + label + ")" : "");
+    $("qrBox").dataset.link = keyLink(key);
+    $("qrBox").classList.remove("hidden");
+    $("qrBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  $("copyLinkBtn").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("qrBox").dataset.link); $("copyLinkBtn").textContent = "Copied!"; }
+    catch { prompt("Copy this link:", $("qrBox").dataset.link); }
+    setTimeout(() => ($("copyLinkBtn").textContent = "Copy link"), 1500);
+  });
+
+  $("newKeyForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("adminError").textContent = "";
+    $("newKeyBtn").disabled = true;
+    const key = newKey(), label = $("keyLabel").value.trim();
+    try {
+      await setDoc(doc(db, "invites", key), { label, createdAt: serverTimestamp() });
+      $("keyLabel").value = "";
+      showQr(key, label);
+      loadAdmin();
+    } catch (err) {
+      $("adminError").textContent = "Couldn't create key: " + err.message;
     } finally {
-      $("joinBtn").disabled = false;
+      $("newKeyBtn").disabled = false;
     }
   });
+
+  function fmtDate(ts) {
+    return ts?.toDate ? ts.toDate().toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "";
+  }
+
+  function listItem(title, meta, buttons) {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    const text = document.createElement("div");
+    const t = document.createElement("div");
+    t.textContent = title;
+    const m = document.createElement("div");
+    m.className = "meta";
+    m.textContent = meta;
+    text.append(t, m);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    for (const [label, cls, fn] of buttons) {
+      const b = document.createElement("button");
+      b.className = "small " + cls;
+      b.textContent = label;
+      b.addEventListener("click", fn);
+      actions.appendChild(b);
+    }
+    row.append(text, actions);
+    return row;
+  }
+
+  async function loadAdmin() {
+    const keyList = $("keyList"), memberList = $("memberList");
+    try {
+      const [invites, members] = await Promise.all([
+        getDocs(collection(db, "invites")),
+        getDocs(collection(db, "members"))
+      ]);
+      const memberDocs = members.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+      keyList.innerHTML = "";
+      if (invites.empty) keyList.textContent = "No keys. Create one above.";
+      for (const d of invites.docs) {
+        const { label, createdAt } = d.data();
+        const used = memberDocs.filter((m) => m.code === d.id).length;
+        keyList.appendChild(listItem(
+          label || "(no label)",
+          [fmtDate(createdAt), used + (used === 1 ? " person joined" : " people joined")].filter(Boolean).join(" · "),
+          [
+            ["Show QR", "", () => showQr(d.id, label)],
+            ["Revoke", "danger", async () => {
+              if (!confirm(`Revoke "${label || d.id}"? Nobody new can join with it. People who already joined stay in.`)) return;
+              await deleteDoc(doc(db, "invites", d.id));
+              loadAdmin();
+            }]
+          ]
+        ));
+      }
+
+      memberList.innerHTML = "";
+      if (!memberDocs.length) memberList.textContent = "No members yet.";
+      for (const m of memberDocs) {
+        const isMe = m.id === currentUser.uid;
+        memberList.appendChild(listItem(
+          m.name + (isMe ? " (you)" : ""),
+          [m.email, fmtDate(m.joinedAt)].filter(Boolean).join(" · "),
+          isMe ? [] : [["Remove", "danger", async () => {
+            if (!confirm(`Remove ${m.name}? They lose access right away. Revoke their key too, or they can rejoin with it.`)) return;
+            await deleteDoc(doc(db, "members", m.id));
+            loadAdmin();
+          }]]
+        ));
+      }
+    } catch (err) {
+      keyList.textContent = memberList.textContent = "Couldn't load: " + err.message;
+    }
+  }
 
   // ---------- Live messages ----------
   function listen() {
