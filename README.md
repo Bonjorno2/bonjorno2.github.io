@@ -35,6 +35,14 @@ The admin (`awarlock2002a@gmail.com`, set in `firestore.rules` and `ADMIN_EMAIL`
 - On a phone: open the link in Safari or Chrome → **Share → Add to Home Screen**, and it works like an app.
 - Typed codes still work: the "Almost there" screen accepts a key typed by hand.
 
+## Emojis, photos & GIFs
+
+- 😊 opens an emoji picker (your recent ones are at the top). Messages that are only 1–3 emoji show big.
+- 📷 sends a photo. It's shrunk on your device to about 1600px so it fits in the free database — sharp on a phone, but not the full-resolution original. On a computer you can also paste a screenshot straight into the message box. Tap a photo to view it full screen.
+- **GIF** opens GIF search (GIPHY) and an **Upload GIF** button for GIF files up to ~700 KB.
+- **GIF search needs a GIPHY key:** sign up at developers.giphy.com → Create an API key (choose "API", not SDK) → paste it into `GIPHY_API_KEY` in `index.html` and upload the file again.
+- Photos are saved on each device after the first view, so scrolling back doesn't re-download them. The free plan holds roughly 3,000–5,000 photos in total.
+
 ## Good to know
 
 - The Firebase config being visible in a public repo is normal. The **rules** are what protect the messages; only members can read or post.

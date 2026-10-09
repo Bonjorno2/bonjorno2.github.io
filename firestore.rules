@@ -79,17 +79,61 @@ service cloud.firestore {
     match /messages/{messageId} {
       allow read: if isMember();
 
-      // Can only post as yourself, text only, up to 2000 characters
+      // Post as yourself, under the name locked in when you joined
       allow create: if isMember()
-        && request.resource.data.keys().hasOnly(['text', 'uid', 'name', 'createdAt'])
         && request.resource.data.uid == request.auth.uid
-        // Must post under the name locked in when you joined
         && request.resource.data.name == get(memberPath(request.auth.uid)).data.name
-        && request.resource.data.text is string
-        && request.resource.data.text.size() > 0
-        && request.resource.data.text.size() <= 2000
-        && request.resource.data.createdAt == request.time;
+        && request.resource.data.createdAt == request.time
+        && (isTextMessage(request.resource.data)
+            || isImageMessage(request.resource.data)
+            || isGifMessage(request.resource.data));
 
+      allow update, delete: if false;
+    }
+
+    // Text, up to 2000 characters
+    function isTextMessage(d) {
+      return d.keys().hasOnly(['text', 'uid', 'name', 'createdAt'])
+        && d.text is string
+        && d.text.size() > 0
+        && d.text.size() <= 2000;
+    }
+
+    // A photo or GIF file you uploaded (stored in /images, sent in the same batch)
+    function isImageMessage(d) {
+      return d.keys().hasOnly(['type', 'imageId', 'w', 'h', 'uid', 'name', 'createdAt'])
+        && d.type == 'image'
+        && d.imageId is string
+        && d.imageId.size() <= 40
+        && hasSize(d)
+        && getAfter(/databases/$(database)/documents/images/$(d.imageId)).data.uid == request.auth.uid;
+    }
+
+    // A GIF from GIPHY search: only GIPHY's own image addresses are allowed
+    function isGifMessage(d) {
+      return d.keys().hasOnly(['type', 'gifUrl', 'w', 'h', 'uid', 'name', 'createdAt'])
+        && d.type == 'gif'
+        && d.gifUrl is string
+        && d.gifUrl.size() <= 500
+        && d.gifUrl.matches('https://(media[0-9]?|i)[.]giphy[.]com/media/[A-Za-z0-9._/-]+')
+        && hasSize(d);
+    }
+
+    function hasSize(d) {
+      return d.w is int && d.h is int
+        && d.w > 0 && d.h > 0 && d.w <= 10000 && d.h <= 10000;
+    }
+
+    // Uploaded photos/GIFs, shrunk by the app to fit in one document (~1 MB)
+    match /images/{imageId} {
+      allow get: if isMember();
+      allow create: if isMember()
+        && request.resource.data.keys().hasOnly(['data', 'uid', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.data is string
+        && request.resource.data.data.size() <= 1000000
+        && request.resource.data.data.matches('data:image/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+');
       allow update, delete: if false;
     }
 
